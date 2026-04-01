@@ -7,8 +7,15 @@ const formatCOP = (valor) =>
     new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", minimumFractionDigits: 0 }).format(valor);
 
 const getPrecio = (nombreServicio, servicios) => {
-    const s = servicios.find((x) => x.nombre === nombreServicio);
-    return s ? s.precio : null;
+    // Handle comma-separated multi-service names
+    const nombres = nombreServicio.split(", ").map(n => n.trim());
+    let total = 0;
+    let found = false;
+    nombres.forEach(n => {
+        const s = servicios.find((x) => x.nombre === n);
+        if (s) { total += s.precio; found = true; }
+    });
+    return found ? total : null;
 };
 
 export default function ClientDashboard() {
@@ -31,10 +38,22 @@ export default function ClientDashboard() {
 
     // Form
     const [showForm, setShowForm] = useState(false);
-    const [servicio, setServicio] = useState("");
+    const [serviciosSeleccionados, setServiciosSeleccionados] = useState([]);
     const [fecha, setFecha] = useState("");
     const [hora, setHora] = useState("");
     const [barberoId, setBarberoId] = useState("");
+
+    // Available slots
+    const [slotsDisponibles, setSlotsDisponibles] = useState([]);
+    const [loadingSlots, setLoadingSlots] = useState(false);
+    const [slotsMsg, setSlotsMsg] = useState("");
+
+    // Reviews
+    const [misResenas, setMisResenas] = useState([]);
+    const [reviewCitaId, setReviewCitaId] = useState(null);
+    const [reviewPuntuacion, setReviewPuntuacion] = useState(5);
+    const [reviewComentario, setReviewComentario] = useState("");
+    const [savingReview, setSavingReview] = useState(false);
 
     const limpiar = () => {
         setError("");
@@ -42,10 +61,12 @@ export default function ClientDashboard() {
     };
 
     const limpiarForm = () => {
-        setServicio("");
+        setServiciosSeleccionados([]);
         setFecha("");
         setHora("");
         setBarberoId("");
+        setSlotsDisponibles([]);
+        setSlotsMsg("");
     };
 
     // Logout
@@ -109,8 +130,8 @@ export default function ClientDashboard() {
     const crearCita = async () => {
         limpiar();
 
-        if (!servicio || !fecha || !hora) {
-            setError("Completa servicio, fecha y hora.");
+        if (serviciosSeleccionados.length === 0 || !fecha || !hora) {
+            setError("Selecciona al menos un servicio, fecha y hora.");
             return;
         }
 
@@ -123,7 +144,7 @@ export default function ClientDashboard() {
                     "Content-Type": "application/json",
                     Authorization: `Bearer ${token}`,
                 },
-                body: JSON.stringify({ servicio, fecha, hora, barbero_id: barberoId ? Number(barberoId) : null }),
+                body: JSON.stringify({ servicios: serviciosSeleccionados, fecha, hora, barbero_id: barberoId ? Number(barberoId) : null }),
             });
 
             const data = await res.json().catch(() => ({}));
@@ -229,7 +250,61 @@ export default function ClientDashboard() {
         cargarServicios();
         cargarBarberos();
         cargarCitas();
+        cargarMisResenas();
     }, []);
+
+    // Load available slots when barber + date change
+    useEffect(() => {
+        if (barberoId && fecha) {
+            cargarSlots();
+        } else {
+            setSlotsDisponibles([]);
+            setSlotsMsg("");
+        }
+    }, [barberoId, fecha]);
+
+    const cargarSlots = async () => {
+        try {
+            setLoadingSlots(true);
+            setSlotsMsg("");
+            const r = await fetch(`${API_URL}/api/horarios-disponibles?barbero_id=${barberoId}&fecha=${fecha}`);
+            const d = await r.json();
+            if (d.mensaje && d.slots?.length === 0) {
+                setSlotsMsg(d.mensaje);
+            }
+            setSlotsDisponibles(d.slots || []);
+        } catch { setSlotsDisponibles([]); }
+        finally { setLoadingSlots(false); }
+    };
+
+    const cargarMisResenas = async () => {
+        try {
+            const r = await fetch(`${API_URL}/api/resenas/mis`, { headers: { Authorization: `Bearer ${token}` } });
+            if (r.ok) setMisResenas(await r.json());
+        } catch { /* silent */ }
+    };
+
+    const enviarResena = async () => {
+        try {
+            setSavingReview(true); limpiar();
+            const r = await fetch(`${API_URL}/api/resenas`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ cita_id: reviewCitaId, puntuacion: reviewPuntuacion, comentario: reviewComentario }),
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(d.error || "Error");
+            setMsgOk("\u00a1Rese\u00f1a enviada! Gracias por tu calificaci\u00f3n.");
+            setReviewCitaId(null);
+            setReviewPuntuacion(5);
+            setReviewComentario("");
+            await cargarMisResenas();
+            setTimeout(() => setMsgOk(""), 4000);
+        } catch (e) { setError(e.message); }
+        finally { setSavingReview(false); }
+    };
+
+    const tieneResena = (citaId) => misResenas.some((r) => r.cita_id === citaId);
 
     // Helpers
     const getStatusBadge = (estado) => {
@@ -261,7 +336,7 @@ export default function ClientDashboard() {
                 <span className="navbar-brand">✂️ Barbería</span>
                 <div className="navbar-user">
                     <span>Hola, <strong>{user.nombre || "Cliente"}</strong></span>
-                    <div className="navbar-avatar">
+                    <div className="navbar-avatar" onClick={() => navigate("/perfil")} style={{ cursor: "pointer" }} title="Mi perfil">
                         {(user.nombre || "C").charAt(0).toUpperCase()}
                     </div>
                     <button className="btn-outline btn-sm" onClick={onLogout}>
@@ -299,19 +374,39 @@ export default function ClientDashboard() {
                             <h3 style={{ marginBottom: 20 }}>Agendar nueva cita</h3>
 
                             <div className="form-group">
-                                <label htmlFor="cd-servicio">Servicio</label>
-                                <select
-                                    id="cd-servicio"
-                                    value={servicio}
-                                    onChange={(e) => setServicio(e.target.value)}
-                                >
-                                    <option value="">— Selecciona un servicio —</option>
-                                    {servicios.map((s) => (
-                                        <option key={s.nombre} value={s.nombre}>
-                                            {s.nombre} — {formatCOP(s.precio)}
-                                        </option>
-                                    ))}
-                                </select>
+                                <label>Servicios</label>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+                                    {servicios.map((s) => {
+                                        const checked = serviciosSeleccionados.includes(s.nombre);
+                                        return (
+                                            <label key={s.nombre} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "6px 8px", borderRadius: 6, background: checked ? "rgba(212,175,55,0.1)" : "transparent", border: checked ? "1px solid var(--gold-400)" : "1px solid var(--border-subtle)", transition: "all 0.2s" }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={() => {
+                                                        setServiciosSeleccionados(prev =>
+                                                            checked ? prev.filter(n => n !== s.nombre) : [...prev, s.nombre]
+                                                        );
+                                                    }}
+                                                    style={{ accentColor: "var(--gold-400)" }}
+                                                />
+                                                <span>{s.nombre}</span>
+                                                <span className="text-muted" style={{ marginLeft: "auto", fontSize: "0.85rem" }}>{formatCOP(s.precio)}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                                {serviciosSeleccionados.length > 0 && (
+                                    <div style={{ marginTop: 8, padding: "8px 12px", background: "rgba(212,175,55,0.08)", borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                        <span style={{ fontSize: "0.85rem" }}>{serviciosSeleccionados.length} servicio{serviciosSeleccionados.length > 1 ? "s" : ""}</span>
+                                        <strong style={{ color: "var(--gold-300)" }}>
+                                            Total: {formatCOP(serviciosSeleccionados.reduce((sum, name) => {
+                                                const s = servicios.find(x => x.nombre === name);
+                                                return sum + (s ? s.precio : 0);
+                                            }, 0))}
+                                        </strong>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="form-group">
@@ -343,12 +438,23 @@ export default function ClientDashboard() {
                                 </div>
                                 <div className="form-group">
                                     <label htmlFor="cd-hora">Hora</label>
-                                    <input
-                                        id="cd-hora"
-                                        type="time"
-                                        value={hora}
-                                        onChange={(e) => setHora(e.target.value)}
-                                    />
+                                    {barberoId && fecha ? (
+                                        <>
+                                            {loadingSlots && <p className="text-muted" style={{ fontSize: "0.85rem" }}>Cargando horarios...</p>}
+                                            {slotsMsg && <p className="text-muted" style={{ fontSize: "0.85rem" }}>{slotsMsg}</p>}
+                                            {!loadingSlots && slotsDisponibles.length > 0 && (
+                                                <select id="cd-hora" value={hora} onChange={(e) => setHora(e.target.value)}>
+                                                    <option value="">— Selecciona hora —</option>
+                                                    {slotsDisponibles.map((s) => <option key={s} value={s}>{s}</option>)}
+                                                </select>
+                                            )}
+                                            {!loadingSlots && slotsDisponibles.length === 0 && !slotsMsg && (
+                                                <input id="cd-hora" type="time" value={hora} onChange={(e) => setHora(e.target.value)} />
+                                            )}
+                                        </>
+                                    ) : (
+                                        <input id="cd-hora" type="time" value={hora} onChange={(e) => setHora(e.target.value)} />
+                                    )}
                                 </div>
                             </div>
 
@@ -448,7 +554,7 @@ export default function ClientDashboard() {
                                                 )}
                                             </td>
                                             <td>
-                                                <div style={{ display: "flex", gap: 6 }}>
+                                                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                                                     {c.estado === "pendiente" && c.payment_status !== "paid" && (
                                                         <button
                                                             className="btn-gold btn-sm"
@@ -467,10 +573,41 @@ export default function ClientDashboard() {
                                                             Cancelar
                                                         </button>
                                                     )}
-                                                    {c.estado !== "pendiente" && (
+                                                    {c.estado === "cumplida" && !tieneResena(c.id) && (
+                                                        <button
+                                                            className="btn-outline btn-sm"
+                                                            onClick={() => { setReviewCitaId(c.id); setReviewPuntuacion(5); setReviewComentario(""); }}
+                                                            disabled={saving}
+                                                        >
+                                                            ⭐ Calificar
+                                                        </button>
+                                                    )}
+                                                    {c.estado === "cumplida" && tieneResena(c.id) && (
+                                                        <span className="badge badge-done" style={{ fontSize: "0.75rem" }}>⭐ Calificado</span>
+                                                    )}
+                                                    {c.estado !== "pendiente" && c.estado !== "cumplida" && (
                                                         <span className="text-muted" style={{ fontSize: "0.82rem" }}>—</span>
                                                     )}
                                                 </div>
+                                                {reviewCitaId === c.id && (
+                                                    <div style={{ marginTop: 8, padding: 10, background: "rgba(255,255,255,0.03)", borderRadius: 6, border: "1px solid var(--border-subtle)" }}>
+                                                        <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+                                                            {[1, 2, 3, 4, 5].map((n) => (
+                                                                <span key={n} style={{ cursor: "pointer", fontSize: 20, color: n <= reviewPuntuacion ? "#ffd700" : "#555" }} onClick={() => setReviewPuntuacion(n)}>★</span>
+                                                            ))}
+                                                        </div>
+                                                        <input
+                                                            placeholder="Comentario (opcional)"
+                                                            value={reviewComentario}
+                                                            onChange={(e) => setReviewComentario(e.target.value)}
+                                                            style={{ width: "100%", padding: 6, marginBottom: 6 }}
+                                                        />
+                                                        <div style={{ display: "flex", gap: 6 }}>
+                                                            <button className="btn-gold btn-sm" onClick={enviarResena} disabled={savingReview}>{savingReview ? "..." : "Enviar"}</button>
+                                                            <button className="btn-outline btn-sm" onClick={() => setReviewCitaId(null)}>Cancelar</button>
+                                                        </div>
+                                                    </div>
+                                                )}
                                             </td>
                                         </tr>
                                     ))}

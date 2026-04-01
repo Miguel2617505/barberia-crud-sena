@@ -59,6 +59,18 @@ export default function BarberDashboard() {
     // Saving
     const [saving, setSaving] = useState(false);
 
+    // Reviews
+    const [resenas, setResenas] = useState({ promedio: 0, total: 0, resenas: [] });
+    const [loadingResenas, setLoadingResenas] = useState(true);
+
+    // Barber's own schedule
+    const DIAS_NOMBRE = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+    const [misHorarios, setMisHorarios] = useState([]);
+    const [loadingHorarios, setLoadingHorarios] = useState(true);
+    const [savingHorario, setSavingHorario] = useState(false);
+    const [showNewHorario, setShowNewHorario] = useState(false);
+    const [newHorForm, setNewHorForm] = useState({ dia_semana: 1, hora_inicio: "08:00", hora_fin: "18:00" });
+
     const clearMsg = () => { setError(""); setMsgOk(""); };
     const showOk = (m) => { setMsgOk(m); setTimeout(() => setMsgOk(""), 4000); };
 
@@ -126,6 +138,8 @@ export default function BarberDashboard() {
     useEffect(() => {
         cargarStats();
         cargarCitas(semanaActual);
+        cargarResenas();
+        cargarMisHorarios();
 
         // Mark existing notifications as seen on first load
         (async () => {
@@ -165,6 +179,54 @@ export default function BarberDashboard() {
         localStorage.removeItem("token");
         localStorage.removeItem("user");
         navigate("/login");
+    };
+
+    const cargarResenas = async () => {
+        try {
+            setLoadingResenas(true);
+            const r = await fetch(`${API_URL}/api/resenas/barbero/${user.id}`);
+            if (r.ok) setResenas(await r.json());
+        } catch { /* silent */ }
+        finally { setLoadingResenas(false); }
+    };
+
+    const cargarMisHorarios = async () => {
+        try {
+            setLoadingHorarios(true);
+            const r = await fetch(`${API_URL}/api/barbero/horarios`, { headers });
+            if (r.ok) setMisHorarios(await r.json());
+        } catch { /* silent */ }
+        finally { setLoadingHorarios(false); }
+    };
+
+    const crearHorario = async () => {
+        try {
+            setSavingHorario(true); clearMsg();
+            const r = await fetch(`${API_URL}/api/barbero/horarios`, {
+                method: "POST",
+                headers: { ...headers, "Content-Type": "application/json" },
+                body: JSON.stringify(newHorForm),
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(d.error || "Error");
+            showOk("Horario creado");
+            setShowNewHorario(false);
+            await cargarMisHorarios();
+        } catch (e) { setError(e.message); }
+        finally { setSavingHorario(false); }
+    };
+
+    const eliminarHorario = async (id) => {
+        if (!window.confirm("¿Eliminar este horario?")) return;
+        try {
+            clearMsg(); setSavingHorario(true);
+            const r = await fetch(`${API_URL}/api/barbero/horarios/${id}`, { method: "DELETE", headers });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(d.error || "Error");
+            showOk("Horario eliminado");
+            await cargarMisHorarios();
+        } catch (e) { setError(e.message); }
+        finally { setSavingHorario(false); }
     };
 
     const dismissToast = (id) => {
@@ -227,7 +289,7 @@ export default function BarberDashboard() {
                 <span className="navbar-brand">✂️ Barbería — Barbero</span>
                 <div className="navbar-user">
                     <span>Hola, <strong>{user.nombre || "Barbero"}</strong></span>
-                    <div className="navbar-avatar">{(user.nombre || "B").charAt(0).toUpperCase()}</div>
+                    <div className="navbar-avatar" onClick={() => navigate("/perfil")} style={{ cursor: "pointer" }} title="Mi perfil">{(user.nombre || "B").charAt(0).toUpperCase()}</div>
                     <button className="btn-outline btn-sm" onClick={onLogout}>Cerrar sesión</button>
                 </div>
             </nav>
@@ -447,6 +509,76 @@ export default function BarberDashboard() {
                         </div>
                     )}
                 </div>
+
+                {/* ========== MI DISPONIBILIDAD ========== */}
+                <div className="card-section animate-in" style={{ marginTop: 24 }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                        <h2 style={{ margin: 0 }}>📅 Mi Disponibilidad</h2>
+                        <div style={{ display: "flex", gap: 8 }}>
+                            <button className="btn-gold btn-sm" onClick={() => { clearMsg(); setShowNewHorario(!showNewHorario); }}>
+                                {showNewHorario ? "✕ Cancelar" : "➕ Agregar"}
+                            </button>
+                            <button className="btn-outline btn-sm" onClick={cargarMisHorarios}>↻</button>
+                        </div>
+                    </div>
+
+                    {showNewHorario && (
+                        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border-subtle)", borderRadius: 8, padding: 16, marginBottom: 16 }}>
+                            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+                                <label style={{ flex: 1, minWidth: 120 }}>
+                                    Día
+                                    <select value={newHorForm.dia_semana} onChange={(e) => setNewHorForm({ ...newHorForm, dia_semana: Number(e.target.value) })} style={{ width: "100%", padding: 8, marginTop: 4 }}>
+                                        {DIAS_NOMBRE.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                                    </select>
+                                </label>
+                                <label style={{ minWidth: 100 }}>
+                                    Desde
+                                    <input type="time" value={newHorForm.hora_inicio} onChange={(e) => setNewHorForm({ ...newHorForm, hora_inicio: e.target.value })} style={{ width: "100%", padding: 8, marginTop: 4 }} />
+                                </label>
+                                <label style={{ minWidth: 100 }}>
+                                    Hasta
+                                    <input type="time" value={newHorForm.hora_fin} onChange={(e) => setNewHorForm({ ...newHorForm, hora_fin: e.target.value })} style={{ width: "100%", padding: 8, marginTop: 4 }} />
+                                </label>
+                                <button className="btn-gold btn-sm" onClick={crearHorario} disabled={savingHorario} style={{ height: 38 }}>
+                                    {savingHorario ? "..." : "Guardar"}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {loadingHorarios && <div className="loading-center"><span className="spinner" /> Cargando...</div>}
+
+                    {!loadingHorarios && misHorarios.length === 0 && (
+                        <div className="empty-state" style={{ padding: "24px 16px" }}>
+                            <p><strong>No has configurado tu disponibilidad</strong></p>
+                            <p className="text-muted">Agrega tus días y horarios de trabajo para que los clientes puedan agendar contigo</p>
+                        </div>
+                    )}
+
+                    {!loadingHorarios && misHorarios.length > 0 && (
+                        <div className="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Día</th><th>Desde</th><th>Hasta</th><th style={{ width: 80 }}></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {misHorarios.map((h) => (
+                                        <tr key={h.id}>
+                                            <td><strong>{DIAS_NOMBRE[h.dia_semana]}</strong></td>
+                                            <td>{h.hora_inicio}</td>
+                                            <td>{h.hora_fin}</td>
+                                            <td>
+                                                <button className="btn-danger btn-sm" onClick={() => eliminarHorario(h.id)} disabled={savingHorario}>🗑</button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* ========== TOAST NOTIFICATIONS ========== */}
@@ -461,6 +593,51 @@ export default function BarberDashboard() {
                     ))}
                 </div>
             )}
+
+            {/* ========== MIS RESEÑAS ========== */}
+            <div className="container" style={{ paddingBottom: 48 }}>
+                <div className="card-section animate-in animate-delay-2">
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                        <h2 style={{ margin: 0 }}>⭐ Mis Reseñas</h2>
+                        <button className="btn-outline btn-sm" onClick={cargarResenas}>↻ Actualizar</button>
+                    </div>
+
+                    {loadingResenas && <div className="loading-center"><span className="spinner" /> Cargando...</div>}
+
+                    {!loadingResenas && (
+                        <>
+                            <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 16 }}>
+                                <div style={{ fontSize: 32, fontWeight: 700, color: "var(--gold-300)" }}>
+                                    {resenas.promedio > 0 ? resenas.promedio : "—"}
+                                </div>
+                                <div>
+                                    <div style={{ color: "#ffd700", fontSize: 18 }}>
+                                        {resenas.promedio > 0 ? "★".repeat(Math.round(resenas.promedio)) + "☆".repeat(5 - Math.round(resenas.promedio)) : "☆☆☆☆☆"}
+                                    </div>
+                                    <div className="text-muted" style={{ fontSize: "0.85rem" }}>{resenas.total} reseña{resenas.total !== 1 ? "s" : ""}</div>
+                                </div>
+                            </div>
+
+                            {resenas.resenas.length === 0 && (
+                                <div className="empty-state" style={{ padding: "24px 16px" }}>
+                                    <p><strong>Aún no tienes reseñas</strong></p>
+                                    <p className="text-muted">Tus clientes podrán calificarte después de una cita cumplida</p>
+                                </div>
+                            )}
+
+                            {resenas.resenas.slice(0, 10).map((r) => (
+                                <div key={r.id} style={{ padding: "10px 0", borderBottom: "1px solid var(--border-subtle)" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                        <strong>{r.cliente_nombre}</strong>
+                                        <span style={{ color: "#ffd700" }}>{"\u2605".repeat(r.puntuacion)}{"\u2606".repeat(5 - r.puntuacion)}</span>
+                                    </div>
+                                    {r.comentario && <p className="text-muted" style={{ margin: "4px 0 0", fontSize: "0.85rem" }}>{r.comentario}</p>}
+                                </div>
+                            ))}
+                        </>
+                    )}
+                </div>
+            </div>
         </div>
     );
 }
